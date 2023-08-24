@@ -1,10 +1,9 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
  Generate a tree of HTML index files from an actual file structure
  or a tree of files representing a file structure.
 """
 
-import jinja2
 from jinja2 import Environment
 import os
 import sys
@@ -13,6 +12,7 @@ import time
 import argparse
 import re
 import logging
+import urllib.parse
 
 # Python 2/3 compatible hack
 try:
@@ -90,8 +90,7 @@ def render_index(prefix, order_by, contents, reverse_order, base_path):
     """
     logger.debug('rendering index for {prefix} ordered by {order_by} and reverse_order={reverse_order}'.format(prefix=prefix, order_by=order_by, reverse_order=reverse_order))
 
-    sorted_contents = sorted(contents, key=lambda k: k[order_by], reverse=reverse_order)
-    formatted_contents = format_file_details(sorted_contents)
+    formatted_contents = format_file_details(contents)
 
     # Remove the base path from the prefix to avoid putting the full
     # filesystem path in the index
@@ -109,40 +108,23 @@ def render_index(prefix, order_by, contents, reverse_order, base_path):
     logging.debug('contents: {contents}'.format(contents=contents))
     logging.debug('parent_directory: {parent_directory}'.format(parent_directory=parent_directory))
 
-    HTML = """
-    <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
-    <html>
-     <head>
-       <title>Index of {{root_prefix}}{{path}}</title>
-     </head>
-     <body>
-       <h1>Index of {{root_prefix}}{{path}}</h1>
-    <table><tr><th></th><th><a href="{{root_prefix}}{{index_link['name']}}">Name</a></th><th><a href="{{root_prefix}}{{index_link['lastModified']}}">Last modified</a></th><th><a href="{{root_prefix}}{{index_link['size']}}">Size</a></th><th>Description</th></tr><tr><th colspan="5"><hr></th></tr>
-    {% if path != '/'%}
-    {% if parent_directory == '' %}
-    <tr><td valign="top"><img src="https://s3-us-west-2.amazonaws.com/icons.puppet.com/back.gif"></td><td><a href="{{parent_directory}}/index_by_name.html">Parent Directory</a></td><td>&nbsp;</td><td align="right">  - </td><td>&nbsp;</td></tr>
-    {% else %}
-    <tr><td valign="top"><img src="https://s3-us-west-2.amazonaws.com/icons.puppet.com/back.gif"></td><td><a href="{{root_prefix}}{{parent_directory}}/index_by_name.html">Parent Directory</a></td><td>&nbsp;</td><td align="right">  - </td><td>&nbsp;</td></tr>
-    {% endif %}
-    {% endif %}
-    {% for item in contents %}
-        {% if item['icon'] == 'folder.gif' %}
-            <tr><td valign="top"><img src="https://s3-us-west-2.amazonaws.com/icons.puppet.com/{{item['icon']}}" alt="[DIR]"></td><td><a href="{{item['name'].split('/')[-1:][0]}}/">{{item['name'].split('/')[-1:][0]}}/</a></td><td align="right">{{item['lastModified']}}  </td><td align="right"> {{item['size']}}</td><td>&nbsp;</td></tr>
-        {% else %}
-            <tr><td valign="top"><img src="https://s3-us-west-2.amazonaws.com/icons.puppet.com/{{item['icon']}}" alt="[DIR]"></td><td><a href="{{item['name'].split('/')[-1:][0]}}">{{item['name'].split('/')[-1:][0]}}</a></td><td align="right">{{item['lastModified']}}  </td><td align="right"> {{item['size']}}</td><td>&nbsp;</td></tr>
-        {% endif %}
-    {% endfor %}
-    <tr><th colspan="5"><hr></th></tr>
-    </table>
-    </body></html>
-    """
+    html = []
+    html.append("<html>")
+    html.append("<head><title>Index of {}{}{}</title></head>".format(root_prefix, path, '/' if path != '' else ''))
+    html.append("<body bgcolor=\"white\">")
+    html.append("<h1>Index of {}{}{}</h1>".format(root_prefix, path, '/' if path != '' else ''))
+    html.append("<hr><pre>")
+    if path != '':
+        html.append("<a href=\"../index.html\">../</a>")
+    for item in formatted_contents:
+        if item['icon'] == 'folder.gif':
+            html.append("<a href=\"{}/index.html\">{}/</a>{} {} {:>19}".format(urllib.parse.quote(item["name"]), item["displayname"], ' '*(49-len(item["displayname"])), item["lastModified"], '-'))
+        else:
+            html.append("<a href=\"{}\">{}</a>{} {} {:>19}".format(urllib.parse.quote(item["name"]), item["displayname"], ' '*(50-len(item["displayname"])), item["lastModified"], item["size"]))
+    html.append("</pre><hr>")
+    html.append("</body></html>")
 
-    return Environment().from_string(HTML).render(
-        path=path,
-        contents=formatted_contents,
-        parent_directory=parent_directory,
-        index_link=index_by,
-        root_prefix=root_prefix)
+    return "\n".join(html)
 
 
 def index_file_name(prefix, order_by, reverse_order):
@@ -152,7 +134,7 @@ def index_file_name(prefix, order_by, reverse_order):
 
 
 def format_date(d):
-    return datetime.fromtimestamp(int(d)).strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.utcfromtimestamp(int(d)).strftime('%d-%b-%Y %H:%M')
 
 
 def format_size(a_number, suffix='B'):
@@ -168,8 +150,9 @@ def format_file_details(file_details):
     for k in file_details:
         out.append ({
         'name': k['name'],
+        'displayname': k['name'] if len(k['name']) <= 50 else k['name'][:47] + '..&gt;',
         'lastModified': format_date(k['lastModified']),
-        'size': format_size(k['size']),
+        'size': k['size'],
         'icon': k['icon']
     })
     return out
@@ -263,6 +246,8 @@ def gather_file_details(current_path, list_of_files):
     for file_name in list_of_files:
         # add size, lastModified, file/folder type to metadata
         full_path = os.path.join(current_path, file_name)
+        if file_name.startswith('.'):
+            continue
         if is_excluded_file(file_name):
             continue
         if is_excluded_path(full_path):
@@ -278,18 +263,18 @@ def gather_file_details(current_path, list_of_files):
 
 
 def make_index_files(base_path, current_path, file_details):
-    for order_by in ['name', 'size', 'lastModified']:
-        for reverse_order in [True, False]:
-            file_name = os.path.join(current_path, index_file_name('', order_by, reverse_order))
-            rendered_html = render_index(current_path, order_by, file_details,
-                                         reverse_order, base_path)
-            if configuration.noop:
-                logging.info('Would create: {}'.format(file_name))
-            else:
-                logging.info('Wrote: {}'.format(file_name))
-                index_file = open(file_name, 'w')
-                index_file.write(rendered_html)
-                index_file.close()
+    order_by = 'name'
+    reverse_order = False
+    file_name = os.path.join(current_path, 'index.html')
+    rendered_html = render_index(current_path, order_by, file_details,
+                                 reverse_order, base_path)
+    if configuration.noop:
+        logging.info('Would create: {}'.format(file_name))
+    else:
+        logging.info('Wrote: {}'.format(file_name))
+        index_file = open(file_name, 'w')
+        index_file.write(rendered_html)
+        index_file.close()
 
 
 def traverse_tree(base_path, current_path, file_metadata=None):

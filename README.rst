@@ -1,9 +1,9 @@
-Apache-style Directory Index Generator
+Nginx-style Directory Index Generator
 =======================
 
-This script generates Apache-style directory indexes as static HTML
+This script generates Nginx-style directory indexes as static HTML
 files. The primary use case is indexing files in an AWS S3 bucket so
-that they can be navigated like files served by an Apache web server.
+that they can be navigated like files served by an Nginx web server.
 
 Usage:
 
